@@ -1,0 +1,105 @@
+{
+	"backtraceGraph" : 
+	{
+		"commands" : 
+		[
+			"install"
+		],
+		"files" : 
+		[
+			"external/glfwpp/external/glew-cmake/CMakeLists.txt"
+		],
+		"nodes" : 
+		[
+			{
+				"file" : 0
+			},
+			{
+				"command" : 0,
+				"file" : 0,
+				"line" : 209,
+				"parent" : 0
+			},
+			{
+				"command" : 0,
+				"file" : 0,
+				"line" : 212,
+				"parent" : 0
+			},
+			{
+				"command" : 0,
+				"file" : 0,
+				"line" : 215,
+				"parent" : 0
+			}
+		]
+	},
+	"installers" : 
+	[
+		{
+			"backtrace" : 1,
+			"component" : "Unspecified",
+			"destination" : "lib",
+			"paths" : 
+			[
+				"external/glfwpp/external/glew-cmake/lib/glewd.lib"
+			],
+			"targetId" : "libglew_static::@e104c41b220cdc1f5f75",
+			"targetIndex" : 10,
+			"type" : "target"
+		},
+		{
+			"backtrace" : 1,
+			"component" : "Unspecified",
+			"destination" : "lib",
+			"paths" : 
+			[
+				"external/glfwpp/external/glew-cmake/lib/glew-sharedd.lib"
+			],
+			"targetId" : "libglew_shared::@e104c41b220cdc1f5f75",
+			"targetIndex" : 9,
+			"targetIsImportLibrary" : true,
+			"type" : "target"
+		},
+		{
+			"backtrace" : 2,
+			"component" : "Unspecified",
+			"destination" : "lib/cmake/glew",
+			"exportName" : "glew-cmake",
+			"exportTargets" : 
+			[
+				{
+					"id" : "libglew_static::@e104c41b220cdc1f5f75",
+					"index" : 10
+				},
+				{
+					"id" : "libglew_shared::@e104c41b220cdc1f5f75",
+					"index" : 9
+				}
+			],
+			"paths" : 
+			[
+				"external/glfwpp/external/glew-cmake/CMakeFiles/Export/lib/cmake/glew/glewConfig.cmake"
+			],
+			"type" : "export"
+		},
+		{
+			"backtrace" : 3,
+			"component" : "Unspecified",
+			"destination" : "include/GL",
+			"paths" : 
+			[
+				"external/glfwpp/external/glew-cmake/include/GL/eglew.h",
+				"external/glfwpp/external/glew-cmake/include/GL/glew.h",
+				"external/glfwpp/external/glew-cmake/include/GL/glxew.h",
+				"external/glfwpp/external/glew-cmake/include/GL/wglew.h"
+			],
+			"type" : "file"
+		}
+	],
+	"paths" : 
+	{
+		"build" : "external/glfwpp/external/glew-cmake",
+		"source" : "external/glfwpp/external/glew-cmake"
+	}
+}
