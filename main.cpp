@@ -10,12 +10,35 @@ VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE // has to be defined exactly 
 
 #include <glfwpp/glfwpp.h> // use my (janekb04 at Github) C++ wrapper for GLFW 
 
-#include <iostream> // for logging
+#include <iostream>
+#include <algorithm>
+#include <type_traits>
+#include <tuple>
+namespace ranges = std::ranges;
+
+// Shortcuts
+#define FWD(...) /* perfect ForWarDing */  \
+    ::std::forward<decltype(__VA_ARGS__)>(__VA_ARGS__)
+#define XPL(...) /* eXPression Lambda */ \
+    [&](auto&&... _args) { \
+        auto __arg_holder = std::tuple{FWD(_args)..., nullptr}; \
+        [[maybe_unused]] auto&& _0 = std::get<std::min(static_cast<size_t>(0), sizeof...(_args) - 1)>(__arg_holder); \
+        [[maybe_unused]] auto&& _1 = std::get<std::min(static_cast<size_t>(1), sizeof...(_args) - 1)>(__arg_holder); \
+        [[maybe_unused]] auto&& _2 = std::get<std::min(static_cast<size_t>(2), sizeof...(_args) - 1)>(__arg_holder); \
+        [[maybe_unused]] auto&& _3 = std::get<std::min(static_cast<size_t>(3), sizeof...(_args) - 1)>(__arg_holder); \
+        [[maybe_unused]] auto&& _4 = std::get<std::min(static_cast<size_t>(4), sizeof...(_args) - 1)>(__arg_holder); \
+        [[maybe_unused]] auto&& _5 = std::get<std::min(static_cast<size_t>(5), sizeof...(_args) - 1)>(__arg_holder); \
+        [[maybe_unused]] auto&& _6 = std::get<std::min(static_cast<size_t>(6), sizeof...(_args) - 1)>(__arg_holder); \
+        [[maybe_unused]] auto&& _7 = std::get<std::min(static_cast<size_t>(7), sizeof...(_args) - 1)>(__arg_holder); \
+        [[maybe_unused]] auto&& _8 = std::get<std::min(static_cast<size_t>(8), sizeof...(_args) - 1)>(__arg_holder); \
+        [[maybe_unused]] auto&& _9 = std::get<std::min(static_cast<size_t>(9), sizeof...(_args) - 1)>(__arg_holder); \
+        return __VA_ARGS__; \
+    }
 
 const int WND_WIDTH = 800, WND_HEIGHT = 600; // window dimensions (for now non-resizable)
 const char* const APP_NAME = "vk_mini";
 const uint32_t APP_API_VERSION = VK_MAKE_API_VERSION(0, 1, 2, 0);
-const std::array APP_VALIDATION_LAYERS = {
+const std::array APP_LAYERS = {
 #ifdef NDEBUG
     // intentionally left blank
 #else
@@ -25,8 +48,7 @@ const std::array APP_VALIDATION_LAYERS = {
 const vk::AllocationCallbacks APP_ALLOCATION_CALLBACKS{ // NOTE: consider not using allocation callbacks as the performance gain/loss hasn't been measured. They are intended for logging rather than for a performance gain.
     .pUserData = nullptr,
     .pfnAllocation = [](void* /*pUserData*/, size_t size, size_t alignment, VkSystemAllocationScope /*allocationScope*/) {
-        void* p = mi_malloc_aligned(size, alignment);
-        return p;
+        return mi_malloc_aligned(size, alignment);
     },
     .pfnReallocation = [](void* /*pUserData*/, void* pOriginal, size_t size, size_t alignment, VkSystemAllocationScope /*allocationScope*/) {
         return mi_realloc_aligned(pOriginal, size, alignment);
@@ -51,11 +73,13 @@ int main()
 
         // Load global Vulkan functions
         vk::DynamicLoader dl; // has destructor
-        PFN_vkGetInstanceProcAddr vkGetInstanceProcAddr = dl.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr");
-        VULKAN_HPP_DEFAULT_DISPATCHER.init(vkGetInstanceProcAddr);
+        {
+            PFN_vkGetInstanceProcAddr vkGetInstanceProcAddr = dl.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr");
+            VULKAN_HPP_DEFAULT_DISPATCHER.init(vkGetInstanceProcAddr);
+        }
 
         // Create Vulkan instance
-        vk::Instance instance = [](){
+        auto instance = [](){
             uint32_t implementation_api_version = VULKAN_HPP_DEFAULT_DISPATCHER.vkEnumerateInstanceVersion ? vk::enumerateInstanceVersion() : VK_API_VERSION_1_0;
             
             if (implementation_api_version < APP_API_VERSION)
@@ -73,10 +97,10 @@ int main()
         
             auto instanceExtensions = glfw::getRequiredInstanceExtensions();
 
-            return vk::createInstance(vk::InstanceCreateInfo{ // NOTE: use pNext to debug instance creation and destruction
+            return vk::createInstance(vk::InstanceCreateInfo{ // NOTE: use VkDebugUtilsMessengerEXT pNext to debug instance creation and destruction
                     .pApplicationInfo = &appInfo,
-                    .enabledLayerCount = APP_VALIDATION_LAYERS.size(),
-                    .ppEnabledLayerNames = APP_VALIDATION_LAYERS.data(), // NOTE: vk::EnumerateInstanceLayerProperties to handle optional layers
+                    .enabledLayerCount = APP_LAYERS.size(),
+                    .ppEnabledLayerNames = APP_LAYERS.data(), // NOTE: vk::EnumerateInstanceLayerProperties to handle optional layers
                     .enabledExtensionCount = static_cast<uint32_t>(instanceExtensions.size()), // NOTE: vk::EnumerateInstanceExtensionProperties to handle optional extensions
                     .ppEnabledExtensionNames = instanceExtensions.data()
                 }, 
@@ -84,27 +108,76 @@ int main()
             );
         }();
 
-        // NOTE: create a VkDebugUtilsMessengerEXT for custom error callback instead of default print to stdout
-        
         VULKAN_HPP_DEFAULT_DISPATCHER.init(instance); // load instance-specific function pointers
+    
+        // NOTE: create a VkDebugUtilsMessengerEXT for custom error callback instead of default print to stdout
 
-        auto physicalDeviceGroups = instance.enumeratePhysicalDeviceGroups();
-        if (physicalDeviceGroups.empty())
-        {
-            throw std::runtime_error("No compatible Physical Devices (GPUs) detected");
-        }
-        auto physicalDevice = physicalDeviceGroups[0].physicalDevices[0];
-        
-        // NOTE: vk::GetPhysicalDeviceProperties and
+        // Create logical device with graphics queue
+        auto [device, graphicsQueue] = [&](){
+            auto physicalDevice = [&](){
+                auto physicalDeviceGroups = instance.enumeratePhysicalDeviceGroups();
+                if (physicalDeviceGroups.empty())
+                {
+                    throw std::runtime_error("No compatible Physical Devices (GPUs) detected");
+                }
 
-        //VULKAN_HPP_DEFAULT_DISPATCHER.init(device); // load device-specific function pointers
+                // NOTE: physicalDevice.getProperties2, .getFeatures2 and similar to check for some things
+
+                return physicalDeviceGroups[0].physicalDevices[0];
+            }();
+            auto graphicsFamilyIdx = [&](){
+                auto queueFamilies = physicalDevice.getQueueFamilyProperties2();
+                auto graphicsFamilyIter = ranges::find_if(queueFamilies, XPL(bool(_0.queueFamilyProperties.queueFlags & vk::QueueFlagBits::eGraphics)));
+                if (graphicsFamilyIter == queueFamilies.end())
+                {
+                    throw std::runtime_error("No queue family supporting graphics operations found");
+                }
+                return static_cast<uint32_t>(graphicsFamilyIter - queueFamilies.begin());
+            }();
+            float queuePriority{ 1.0f };
+            auto queueFlags = vk::DeviceQueueCreateFlags{};
+            vk::DeviceQueueCreateInfo queueCreateInfo{
+                .flags = queueFlags,
+                .queueFamilyIndex = graphicsFamilyIdx,
+                .queueCount = 1, // NOTE: possibly use multiple queues
+                .pQueuePriorities = &queuePriority
+            };
+            vk::StructureChain deviceCreateInfo{
+                vk::DeviceCreateInfo{
+                    .flags = vk::DeviceCreateFlags{},
+                    .queueCreateInfoCount = 1,
+                    .pQueueCreateInfos = &queueCreateInfo,
+                    .enabledLayerCount = APP_LAYERS.size(),
+                    .ppEnabledLayerNames = APP_LAYERS.data(),
+                    .enabledExtensionCount = 0, // NOTE: supply device extensions here
+                    .ppEnabledExtensionNames = nullptr,
+                    .pEnabledFeatures = nullptr // using PhysicalDeviceFeatures2 instead
+                },
+                vk::PhysicalDeviceFeatures2{
+                    .features = vk::PhysicalDeviceFeatures{}
+                }
+            };
+            auto device = physicalDevice.createDevice(deviceCreateInfo.get());
+
+            vk::DeviceQueueInfo2 queueInfo{
+                .flags = queueFlags,
+                .queueFamilyIndex = graphicsFamilyIdx,
+                .queueIndex = 0 // NOTE: possibly use multiple queues
+            };
+            auto graphicsQueue = device.getQueue2(queueInfo);
+
+            return std::tuple{std::move(device), std::move(graphicsQueue)};
+        }();
+
+        VULKAN_HPP_DEFAULT_DISPATCHER.init(device); // load device-specific function pointers
 
         while (!window.shouldClose())
         {
             glfw::pollEvents();
         }
 
-        //instance.destroy(APP_ALLOCATION_CALLBACKS);
+        device.destroy();
+        instance.destroy(APP_ALLOCATION_CALLBACKS);
     }
     catch(const glfw::Error& e)
     {
