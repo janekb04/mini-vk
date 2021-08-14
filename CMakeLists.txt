@@ -12,7 +12,7 @@ target_compile_features(mini-vk PRIVATE cxx_std_20)
 # Compiler specific options
 if(MSVC)
     target_compile_options(mini-vk PRIVATE "/W4") # NOTE: add "/WX" to treat warnings as errors
-    target_link_options(mini-vk PRIVATE "/SUBSYSTEM:WINDOWS" "/ENTRY:mainCRTStartup") # launch with no terminal window
+    #target_link_options(mini-vk PRIVATE "/SUBSYSTEM:WINDOWS" "/ENTRY:mainCRTStartup") # launch with no terminal window
 else()
     target_compile_options(mini-vk PRIVATE "-Wall" "-Wextra") # NOTE: add "-Werror" to treat warnings as errors
 endif()
