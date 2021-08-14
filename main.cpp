@@ -48,9 +48,10 @@ const std::array APP_LAYERS = {
 #ifdef NDEBUG
 // intentionally left blank
 #else
-    "VK_LAYER_KHRONOS_validation"
+    "VK_LAYER_KHRONOS_validation"  // contrary to extensions there is no VK_KHRONOS_VALIDATION_LAYER_NAME
 #endif
 };
+const std::array APP_DEVICE_EXTENSIONS{VK_KHR_SWAPCHAIN_EXTENSION_NAME};
 const vk::AllocationCallbacks APP_ALLOCATION_CALLBACKS{
     // NOTE: consider not using allocation callbacks as the performance
     // gain/loss hasn't been measured. They are intended for logging rather than
@@ -132,35 +133,56 @@ int main() {
 
     // Create logical device with graphics queue
     auto [device, graphicsQueue, presentQueue] = [&]() {
-      auto physicalDevice = [&]() {
+      auto [physicalDevice, graphicsFamilyIdx, presentFamilyIdx] = [&]() {
         auto physicalDeviceGroups = instance.enumeratePhysicalDeviceGroups();
-        if (physicalDeviceGroups.empty()) {
-          throw std::runtime_error("No compatible Physical Devices (GPUs) detected");
-        }
+        for (auto&& physicalDeviceGroup : physicalDeviceGroups) {
+          auto physicalDevice = physicalDeviceGroup.physicalDevices[0];  // the group is guaranteed to
+                                                                         // have at least one
+                                                                         // physical device, while all
+                                                                         // physical devices
+                                                                         // in the group are required
+                                                                         // to have the same features,
+                                                                         // extensions and properties,
+                                                                         // so only one needs to be examined
 
-        // NOTE: physicalDevice.getProperties2, .getFeatures2 and similar to
-        // check for some things
+          auto [graphicsFamilyIdx, presentFamilyIdx] = [&]() {
+            auto queueFamilies = physicalDevice.getQueueFamilyProperties2();
+            std::optional<uint32_t> graphicsFamilyIdx, presentFamilyIdx;
+            for (uint32_t i = 0; i < queueFamilies.size(); ++i) {
+              if (queueFamilies[i].queueFamilyProperties.queueFlags & vk::QueueFlagBits::eGraphics) {
+                graphicsFamilyIdx = i;
+              }
+              if (physicalDevice.getSurfaceSupportKHR(i, surface)) {
+                presentFamilyIdx = i;
+              }
+            }
+            return std::tuple{graphicsFamilyIdx, presentFamilyIdx};
+          }();
 
-        return physicalDeviceGroups[0].physicalDevices[0];
-      }();
-      auto [graphicsFamilyIdx, presentFamilyIdx] = [&]() {
-        auto queueFamilies = physicalDevice.getQueueFamilyProperties2();
-        std::optional<uint32_t> graphicsFamilyIdx, presentFamilyIdx;
-        for (uint32_t i = 0; i < queueFamilies.size(); ++i) {
-          if (queueFamilies[i].queueFamilyProperties.queueFlags & vk::QueueFlagBits::eGraphics) {
-            graphicsFamilyIdx = i;
+          if (!graphicsFamilyIdx.has_value() || !presentFamilyIdx.has_value()) {
+            continue;
           }
-          if (physicalDevice.getSurfaceSupportKHR(i, surface)) {
-            presentFamilyIdx = i;
-          }
+
+          bool deviceSuitable = [&](const vk::PhysicalDevice& physicalDevice) {
+            auto supportedExtensions = physicalDevice.enumerateDeviceExtensionProperties();
+
+            // NOTE: possibly use a different data structure to find if all extensions are supported
+            for (auto&& requiredExtension : APP_DEVICE_EXTENSIONS) {
+              if (!ranges::any_of(supportedExtensions, XPL(strcmp(requiredExtension, _0.extensionName) == 0))) {
+                return false;
+              }
+            }
+            return true;
+          }(physicalDevice);
+
+          if (deviceSuitable)
+            return std::tuple{physicalDevice, *graphicsFamilyIdx, *presentFamilyIdx};
+          // NOTE: physicalDevice.getProperties2, .getFeatures2 and similar to
+          // check for some things as currently the first supported GPU is returned, rather than the best
+
+          // NOTE: when a device is deemed not suitable, possibly print an error message
+          // indicating why, so the user may know that some GPUs are not supported for informative reasons
         }
-        if (!graphicsFamilyIdx.has_value()) {
-          throw std::runtime_error("No graphics-capable queue family found");
-        }
-        if (!presentFamilyIdx.has_value()) {
-          throw std::runtime_error("No present-capable queue family found");
-        }
-        return std::tuple{*graphicsFamilyIdx, *presentFamilyIdx};
       }();
 
       float graphicsQueuePriority = 1.0f, presentQueuePriority = 1.0f;
@@ -184,8 +206,8 @@ int main() {
                                               .pQueueCreateInfos = queueCreateInfos.data(),
                                               .enabledLayerCount = APP_LAYERS.size(),
                                               .ppEnabledLayerNames = APP_LAYERS.data(),
-                                              .enabledExtensionCount = 0,  // NOTE: supply device extensions here
-                                              .ppEnabledExtensionNames = nullptr,
+                                              .enabledExtensionCount = APP_DEVICE_EXTENSIONS.size(),
+                                              .ppEnabledExtensionNames = APP_DEVICE_EXTENSIONS.data(),
                                               .pEnabledFeatures = nullptr  // using PhysicalDeviceFeatures2 instead
                                           },
                                           vk::PhysicalDeviceFeatures2{.features = vk::PhysicalDeviceFeatures{}}};
