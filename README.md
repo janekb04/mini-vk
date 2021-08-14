@@ -1,0 +1,1 @@
+Creating a mostly (but not overly) minimal, yet working, (and following as many best practices as possible, or if not, documenting where it is due) and using the newest features and APIs, Vulkan example.
