@@ -283,8 +283,8 @@ int main() {
                                                                                      : surfaceCapabilities.maxImageCount));
             // NOTE: should always use eExclusive and manually synchronize for better performance
             auto imageSharingMode =
-                (graphicsFamilyIdx == presentFamilyIdx) ? vk::SharingMode::eConcurrent : vk::SharingMode::eExclusive;
-            auto queueFamilyIndices = ((graphicsFamilyIdx == presentFamilyIdx) ? std::vector{graphicsFamilyIdx, presentFamilyIdx}
+                (graphicsFamilyIdx != presentFamilyIdx) ? vk::SharingMode::eConcurrent : vk::SharingMode::eExclusive;
+            auto queueFamilyIndices = ((graphicsFamilyIdx != presentFamilyIdx) ? std::vector{graphicsFamilyIdx, presentFamilyIdx}
                                                                                : std::vector<uint32_t>{});
             auto compositeAlpha = window.getAttribTransparentFramebuffer() ? vk::CompositeAlphaFlagBitsKHR::ePostMultiplied
                                                                            : vk::CompositeAlphaFlagBitsKHR::eOpaque;
