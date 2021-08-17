@@ -21,7 +21,7 @@ add_subdirectory(external/glfwpp)
 add_subdirectory(external/mimalloc)
 find_package(Vulkan REQUIRED FATAL_ERROR)
 
-add_shader_target(shaders basic.vert)
+add_shader_target(shaders "basic.vert;basic.frag")
 
 add_executable(mini-vk main.cpp)
 target_link_libraries(mini-vk PRIVATE GLFWPP Vulkan::Headers mimalloc-static)

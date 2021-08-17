@@ -82,7 +82,7 @@ const char* const APP_VERTEX_SHADER_ENTRY_POINT = "main";
 const char* const APP_FRAGMENT_SHADER_PATH = "basic.frag.spv";
 const char* const APP_FRAGMENT_SHADER_ENTRY_POINT = "main";
 
-[[nodiscard]] std::pair<std::unique_ptr<std::byte[]>, size_t> read_binary_file(const std::filesystem::path& p) {
+[[nodiscard]] auto read_binary_file(const std::filesystem::path& p) {
     std::ifstream in{p, std::ios_base::in | std::ios_base::binary};
     if (!in.is_open()) {
         throw std::runtime_error("Couldn't open file " + p.string());
@@ -90,7 +90,7 @@ const char* const APP_FRAGMENT_SHADER_ENTRY_POINT = "main";
     size_t sz = std::filesystem::file_size(p);  // can't throw as `p` exists
     auto buffer = std::make_unique_for_overwrite<std::byte[]>(sz);
     in.read(reinterpret_cast<char*>(buffer.get()), sz);
-    return {buffer, sz};
+    return std::tuple{std::move(buffer), sz};
 }
 
 int main() {
@@ -371,14 +371,13 @@ int main() {
                 auto vertexShaderModule = createShaderModule(vertexShaderBinary.get(), vertexShaderByteLength);
                 auto fragmentShaderModule = createShaderModule(fragmentShaderBinary.get(), fragmentShaderByteLength);
                 return std::tuple{vertexShaderModule, fragmentShaderModule};
-            }();
-        
+            }();        
             auto pipeShaderStageCreateInfos = std::array{
                 vk::PipelineShaderStageCreateInfo{
                     .stage{vk::ShaderStageFlagBits::eVertex},
                     .module{vertexShaderModule},
                     .pName{APP_VERTEX_SHADER_ENTRY_POINT},
-                    .pSpecializationInfo{} // NOTE: canbe used for constants in shader code, like work group size
+                    .pSpecializationInfo{} // NOTE: can be used for constants in shader code, like work group size
                 },
                 vk::PipelineShaderStageCreateInfo{
                     .stage{vk::ShaderStageFlagBits::eFragment},
