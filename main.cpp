@@ -20,10 +20,10 @@ VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE  // has to be defined exactly
 #include <array>
 #include <cstddef>
 #include <filesystem>
-#include <span>
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <span>
 #include <tuple>
 #include <type_traits>
 
@@ -361,7 +361,7 @@ int main() {
             return swapchainImageViews;
         }();
 
-        auto graphicsPipeline = [&device]() {
+        auto graphicsPipeline = [&device, &swapchainImageExtent]() {
             auto [vertexShaderModule, fragmentShaderModule] = [&device]() {
                 auto createShaderModule = [&device](std::byte* spirv, size_t sz) {
                     return device.createShaderModule({.codeSize{sz}, .pCode{reinterpret_cast<uint32_t*>(spirv)}});
@@ -371,61 +371,79 @@ int main() {
                 auto vertexShaderModule = createShaderModule(vertexShaderBinary.get(), vertexShaderByteLength);
                 auto fragmentShaderModule = createShaderModule(fragmentShaderBinary.get(), fragmentShaderByteLength);
                 return std::tuple{vertexShaderModule, fragmentShaderModule};
-            }();        
-            auto pipeShaderStageCreateInfos = std::array{
-                vk::PipelineShaderStageCreateInfo{
-                    .stage{vk::ShaderStageFlagBits::eVertex},
-                    .module{vertexShaderModule},
-                    .pName{APP_VERTEX_SHADER_ENTRY_POINT},
-                    .pSpecializationInfo{} // NOTE: can be used for constants in shader code, like work group size
-                },
-                vk::PipelineShaderStageCreateInfo{
-                    .stage{vk::ShaderStageFlagBits::eFragment},
-                    .module{fragmentShaderModule},
-                    .pName{APP_FRAGMENT_SHADER_ENTRY_POINT},
-                    .pSpecializationInfo{}
-                }
+            }();
+            auto shaderStageCreateInfos =
+                std::array{vk::PipelineShaderStageCreateInfo{
+                               .stage{vk::ShaderStageFlagBits::eVertex},
+                               .module{vertexShaderModule},
+                               .pName{APP_VERTEX_SHADER_ENTRY_POINT},
+                               .pSpecializationInfo{}  // NOTE: can be used for constants in shader code, like work group size
+                           },
+                           vk::PipelineShaderStageCreateInfo{.stage{vk::ShaderStageFlagBits::eFragment},
+                                                             .module{fragmentShaderModule},
+                                                             .pName{APP_FRAGMENT_SHADER_ENTRY_POINT},
+                                                             .pSpecializationInfo{}}};
+            vk::PipelineVertexInputStateCreateInfo vertexInputState{};  // NOTE: should use vertex and index buffers
+            vk::PipelineInputAssemblyStateCreateInfo inputAssemblyState{.topology = vk::PrimitiveTopology::eTriangleList,
+                                                                        .primitiveRestartEnable = false};
+            vk::Viewport viewport{.x = 0,
+                                  .y = 0,
+                                  .width = swapchainImageExtent.width,
+                                  .height = swapchainImageExtent.height,
+                                  .minDepth = 0.0,
+                                  .maxDepth = 1.0};
+            vk::Rect2D scissor{.offset{0, 0}, .extent{swapchainImageExtent}};
+            vk::PipelineViewportStateCreateInfo viewportState{
+                .viewportCount = 1, // NOTE: using multiple requires enabling a device feature
+                .pViewports = &viewport,
+                .scissorCount = 1,
+                .pScissors = &scissor
             };
+            vk::PipelineRasterizationStateCreateInfo rasterizationState{
+                .depthClampEnable = false, // NOTE: useful for shadow mapping, requires a device feature
+                .rasterizerDiscardEnable = false, // enabling it discards all fragments (causes no output)
+                .polygonMode = vk::PolygonMode::eFill, // NOTE: using eLine for wireframe requires a device feature
+                .cullMode = vk::CullModeFlagBits::eBack,
+                .frontFace = vk::FrontFace::eClockwise,
+                .depthBiasEnable = false, // NOTE: this and similar useful for shadow mapping
+                .lineWidth = 1.0 // a wider line requires a device feature
+            };
+            
 
             device.destroy(vertexShaderModule);
             device.destroy(fragmentShaderModule);
             return vk::Pipeline{};
         }();
 
-    // Main loop
-    while (!window.shouldClose()) {
-        glfw::pollEvents();
+        // Main loop
+        while (!window.shouldClose()) {
+            glfw::pollEvents();
+        }
+
+        // Cleanup
+        for (auto&& swapchainImageView : swapchainImageViews) {
+            device.destroy(swapchainImageView);
+        }
+        device.destroy(swapchain);
+        device.destroy();
+        instance.destroy(surface);
+        instance.destroy(APP_ALLOCATION_CALLBACKS);
+    } catch (const glfw::Error& e) {
+        std::cerr << "GLFW error: " << e.what() << '\n';
+        return EXIT_FAILURE;
+    } catch (const vk::Error& e) {
+        std::cerr << "Vulkan error: " << e.what() << '\n';
+        return EXIT_FAILURE;
+    } catch (const std::runtime_error& e) {
+        std::cerr << "Runtime Error: " << e.what() << '\n';
+        return EXIT_FAILURE;
+    } catch (const std::exception& e) {
+        std::cerr << "Exception: " << e.what() << '\n';
+        return EXIT_FAILURE;
+    } catch (...) {
+        std::cerr << "Unknown error\n";
+        return EXIT_FAILURE;
     }
 
-    // Cleanup
-    for (auto&& swapchainImageView : swapchainImageViews) {
-        device.destroy(swapchainImageView);
-    }
-    device.destroy(swapchain);
-    device.destroy();
-    instance.destroy(surface);
-    instance.destroy(APP_ALLOCATION_CALLBACKS);
-}
-catch (const glfw::Error& e) {
-    std::cerr << "GLFW error: " << e.what() << '\n';
-    return EXIT_FAILURE;
-}
-catch (const vk::Error& e) {
-    std::cerr << "Vulkan error: " << e.what() << '\n';
-    return EXIT_FAILURE;
-}
-catch (const std::runtime_error& e) {
-    std::cerr << "Runtime Error: " << e.what() << '\n';
-    return EXIT_FAILURE;
-}
-catch (const std::exception& e) {
-    std::cerr << "Exception: " << e.what() << '\n';
-    return EXIT_FAILURE;
-}
-catch (...) {
-    std::cerr << "Unknown error\n";
-    return EXIT_FAILURE;
-}
-
-return EXIT_SUCCESS;
+    return EXIT_SUCCESS;
 }
