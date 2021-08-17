@@ -18,7 +18,12 @@ VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE  // has to be defined exactly
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
+#include <filesystem>
+#include <span>
+#include <fstream>
 #include <iostream>
+#include <memory>
 #include <tuple>
 #include <type_traits>
 
@@ -72,6 +77,21 @@ const vk::AllocationCallbacks APP_ALLOCATION_CALLBACKS{
     // callbacks that will notify the application that the Vulkan implementation
     // performed an allocation using its own mechanisms.
 };
+const char* const APP_VERTEX_SHADER_PATH = "basic.vert.spv";
+const char* const APP_VERTEX_SHADER_ENTRY_POINT = "main";
+const char* const APP_FRAGMENT_SHADER_PATH = "basic.frag.spv";
+const char* const APP_FRAGMENT_SHADER_ENTRY_POINT = "main";
+
+[[nodiscard]] std::pair<std::unique_ptr<std::byte[]>, size_t> read_binary_file(const std::filesystem::path& p) {
+    std::ifstream in{p, std::ios_base::in | std::ios_base::binary};
+    if (!in.is_open()) {
+        throw std::runtime_error("Couldn't open file " + p.string());
+    }
+    size_t sz = std::filesystem::file_size(p);  // can't throw as `p` exists
+    auto buffer = std::make_unique_for_overwrite<std::byte[]>(sz);
+    in.read(reinterpret_cast<char*>(buffer.get()), sz);
+    return {buffer, sz};
+}
 
 int main() {
     try {
@@ -341,35 +361,72 @@ int main() {
             return swapchainImageViews;
         }();
 
-        // Main loop
-        while (!window.shouldClose()) {
-            glfw::pollEvents();
-        }
+        auto graphicsPipeline = [&device]() {
+            auto [vertexShaderModule, fragmentShaderModule] = [&device]() {
+                auto createShaderModule = [&device](std::byte* spirv, size_t sz) {
+                    return device.createShaderModule({.codeSize{sz}, .pCode{reinterpret_cast<uint32_t*>(spirv)}});
+                };
+                auto [vertexShaderBinary, vertexShaderByteLength] = read_binary_file(APP_VERTEX_SHADER_PATH);
+                auto [fragmentShaderBinary, fragmentShaderByteLength] = read_binary_file(APP_FRAGMENT_SHADER_PATH);
+                auto vertexShaderModule = createShaderModule(vertexShaderBinary.get(), vertexShaderByteLength);
+                auto fragmentShaderModule = createShaderModule(fragmentShaderBinary.get(), fragmentShaderByteLength);
+                return std::tuple{vertexShaderModule, fragmentShaderModule};
+            }();
+        
+            auto pipeShaderStageCreateInfos = std::array{
+                vk::PipelineShaderStageCreateInfo{
+                    .stage{vk::ShaderStageFlagBits::eVertex},
+                    .module{vertexShaderModule},
+                    .pName{APP_VERTEX_SHADER_ENTRY_POINT},
+                    .pSpecializationInfo{} // NOTE: canbe used for constants in shader code, like work group size
+                },
+                vk::PipelineShaderStageCreateInfo{
+                    .stage{vk::ShaderStageFlagBits::eFragment},
+                    .module{fragmentShaderModule},
+                    .pName{APP_FRAGMENT_SHADER_ENTRY_POINT},
+                    .pSpecializationInfo{}
+                }
+            };
 
-        // Cleanup
-        for (auto&& swapchainImageView : swapchainImageViews) {
-            device.destroy(swapchainImageView);
-        }
-        device.destroy(swapchain);
-        device.destroy();
-        instance.destroy(surface);
-        instance.destroy(APP_ALLOCATION_CALLBACKS);
-    } catch (const glfw::Error& e) {
-        std::cerr << "GLFW error: " << e.what() << '\n';
-        return EXIT_FAILURE;
-    } catch (const vk::Error& e) {
-        std::cerr << "Vulkan error: " << e.what() << '\n';
-        return EXIT_FAILURE;
-    } catch (const std::runtime_error& e) {
-        std::cerr << "Runtime Error: " << e.what() << '\n';
-        return EXIT_FAILURE;
-    } catch (const std::exception& e) {
-        std::cerr << "Exception: " << e.what() << '\n';
-        return EXIT_FAILURE;
-    } catch (...) {
-        std::cerr << "Unknown error\n";
-        return EXIT_FAILURE;
+            device.destroy(vertexShaderModule);
+            device.destroy(fragmentShaderModule);
+            return vk::Pipeline{};
+        }();
+
+    // Main loop
+    while (!window.shouldClose()) {
+        glfw::pollEvents();
     }
 
-    return EXIT_SUCCESS;
+    // Cleanup
+    for (auto&& swapchainImageView : swapchainImageViews) {
+        device.destroy(swapchainImageView);
+    }
+    device.destroy(swapchain);
+    device.destroy();
+    instance.destroy(surface);
+    instance.destroy(APP_ALLOCATION_CALLBACKS);
+}
+catch (const glfw::Error& e) {
+    std::cerr << "GLFW error: " << e.what() << '\n';
+    return EXIT_FAILURE;
+}
+catch (const vk::Error& e) {
+    std::cerr << "Vulkan error: " << e.what() << '\n';
+    return EXIT_FAILURE;
+}
+catch (const std::runtime_error& e) {
+    std::cerr << "Runtime Error: " << e.what() << '\n';
+    return EXIT_FAILURE;
+}
+catch (const std::exception& e) {
+    std::cerr << "Exception: " << e.what() << '\n';
+    return EXIT_FAILURE;
+}
+catch (...) {
+    std::cerr << "Unknown error\n";
+    return EXIT_FAILURE;
+}
+
+return EXIT_SUCCESS;
 }
