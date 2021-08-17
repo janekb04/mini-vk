@@ -1,11 +1,14 @@
 cmake_minimum_required(VERSION 3.21)
 project(mini-vk)
 
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/CMakeGLSL")
+enable_language(GLSL)
+
 add_subdirectory(external/glfwpp)
 add_subdirectory(external/mimalloc)
 find_package(Vulkan REQUIRED FATAL_ERROR)
 
-add_executable(mini-vk main.cpp)
+add_executable(mini-vk src/main.cpp src/basic.vert)
 target_link_libraries(mini-vk PRIVATE GLFWPP Vulkan::Headers mimalloc-static)
 target_compile_features(mini-vk PRIVATE cxx_std_20)
 
