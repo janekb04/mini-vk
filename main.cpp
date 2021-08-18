@@ -361,7 +361,7 @@ int main() {
             return swapchainImageViews;
         }();
 
-        auto graphicsPipeline = [&device, &swapchainImageExtent]() {
+        auto [graphicsPipeline, graphicsPipelineLayout] = [&device, &swapchainImageExtent]() {
             auto [vertexShaderModule, fragmentShaderModule] = [&device]() {
                 auto createShaderModule = [&device](std::byte* spirv, size_t sz) {
                     return device.createShaderModule({.codeSize{sz}, .pCode{reinterpret_cast<uint32_t*>(spirv)}});
@@ -386,33 +386,55 @@ int main() {
             vk::PipelineVertexInputStateCreateInfo vertexInputState{};  // NOTE: should use vertex and index buffers
             vk::PipelineInputAssemblyStateCreateInfo inputAssemblyState{.topology = vk::PrimitiveTopology::eTriangleList,
                                                                         .primitiveRestartEnable = false};
+            // NOTE: vk::PipelineTessellationStateCreateInfo is used with tesselation enabled
             vk::Viewport viewport{.x = 0,
                                   .y = 0,
-                                  .width = swapchainImageExtent.width,
-                                  .height = swapchainImageExtent.height,
+                                  .width = static_cast<float>(
+                                      swapchainImageExtent.width),  // NOTE: without the cast there was an error, possible bug
+                                  .height = static_cast<float>(swapchainImageExtent.height),
                                   .minDepth = 0.0,
                                   .maxDepth = 1.0};
             vk::Rect2D scissor{.offset{0, 0}, .extent{swapchainImageExtent}};
             vk::PipelineViewportStateCreateInfo viewportState{
-                .viewportCount = 1, // NOTE: using multiple requires enabling a device feature
+                .viewportCount = 1,  // NOTE: using multiple requires enabling a device feature
                 .pViewports = &viewport,
                 .scissorCount = 1,
-                .pScissors = &scissor
-            };
+                .pScissors = &scissor};
             vk::PipelineRasterizationStateCreateInfo rasterizationState{
-                .depthClampEnable = false, // NOTE: useful for shadow mapping, requires a device feature
-                .rasterizerDiscardEnable = false, // enabling it discards all fragments (causes no output)
-                .polygonMode = vk::PolygonMode::eFill, // NOTE: using eLine for wireframe requires a device feature
+                .depthClampEnable = false,              // NOTE: useful for shadow mapping, requires a device feature
+                .rasterizerDiscardEnable = false,       // enabling it discards all fragments (causes no output)
+                .polygonMode = vk::PolygonMode::eFill,  // NOTE: using eLine for wireframe requires a device feature
                 .cullMode = vk::CullModeFlagBits::eBack,
                 .frontFace = vk::FrontFace::eClockwise,
-                .depthBiasEnable = false, // NOTE: this and similar useful for shadow mapping
-                .lineWidth = 1.0 // a wider line requires a device feature
+                .depthBiasEnable = false,  // NOTE: this and similar useful for shadow mapping
+                .lineWidth = 1.0           // a wider line requires a device feature
             };
-            
+            vk::PipelineMultisampleStateCreateInfo multisampleState{// NOTE: can be use for AA
+                                                                    .rasterizationSamples = vk::SampleCountFlagBits::e1};
+            // NOTE: vk::PipelineDepthStencilStateCreateInfo is used when a depth/stencil buffer is present
+            vk::PipelineColorBlendAttachmentState colorBlendAttachmentState{
+                // NOTE: can be disabled if not using blending
+                .blendEnable = true,
+                .srcColorBlendFactor = vk::BlendFactor::eSrcAlpha,
+                .dstColorBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha,
+                .colorBlendOp = vk::BlendOp::eAdd,
+                .srcAlphaBlendFactor = vk::BlendFactor::eOne,
+                .dstAlphaBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha,
+                .alphaBlendOp = vk::BlendOp::eAdd};
+            vk::PipelineColorBlendStateCreateInfo colorBlendState{
+                .logicOpEnable = false,  // NOTE: can be used for bitwise compositing, possibly in OIT
+                .attachmentCount = 1,    // NOTE: can use multiplt for multiple target; different options require a device feature
+                .pAttachments = &colorBlendAttachmentState
+                // NOTE .blendConstants can be used for custom blend constants in blend operations
+            };
+            // NOTE: vk::PipelineDynamicStateCreateInfo can be used for dynamic state
+            vk::PipelineLayout pipelineLayout = device.createPipelineLayout({});  // NOTE: used with uniforms and push constants
+
+            auto pipeline = vk::Pipeline{};
 
             device.destroy(vertexShaderModule);
             device.destroy(fragmentShaderModule);
-            return vk::Pipeline{};
+            return std::tuple{pipeline, pipelineLayout};
         }();
 
         // Main loop
@@ -420,6 +442,7 @@ int main() {
             glfw::pollEvents();
         }
 
+        device.destroy(graphicsPipelineLayout);
         // Cleanup
         for (auto&& swapchainImageView : swapchainImageViews) {
             device.destroy(swapchainImageView);
