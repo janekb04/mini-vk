@@ -81,6 +81,7 @@ const char* const APP_VERTEX_SHADER_PATH = "basic.vert.spv";
 const char* const APP_VERTEX_SHADER_ENTRY_POINT = "main";
 const char* const APP_FRAGMENT_SHADER_PATH = "basic.frag.spv";
 const char* const APP_FRAGMENT_SHADER_ENTRY_POINT = "main";
+auto APP_SAMPLE_COUNT = vk::SampleCountFlagBits::e1;
 
 [[nodiscard]] auto read_binary_file(const std::filesystem::path& p) {
     std::ifstream in{p, std::ios_base::in | std::ios_base::binary};
@@ -361,6 +362,49 @@ int main() {
             return swapchainImageViews;
         }();
 
+        auto renderpass = [&device, &swapchainImageFormat]() {
+            auto attachments = {vk::AttachmentDescription2{
+                .format = swapchainImageFormat,
+                .samples = APP_SAMPLE_COUNT,
+                .loadOp = vk::AttachmentLoadOp::eDontCare,  // NOTE: can be used to clear image before rendering
+                .storeOp = vk::AttachmentStoreOp::eStore,
+                .stencilLoadOp = vk::AttachmentLoadOp::eDontCare,  // NOTE: should be changed when using stencil buffers
+                .stencilStoreOp = vk::AttachmentStoreOp::eDontCare,
+                .initialLayout = vk::ImageLayout::eUndefined,  // NOTE: can only be used in combination with LoadOp::eDontCare
+                .finalLayout = vk::ImageLayout::ePresentSrcKHR}};
+
+            vk::AttachmentReference2 mainColorAttachmentReference{
+                .attachment = 0,
+                .layout = vk::ImageLayout::eColorAttachmentOptimal,
+                .aspectMask = vk::ImageAspectFlagBits::eColor};  // NOTE: I'm not sure if this aspect thing is ok or not, this may
+                                                                 // potentially cause some bug
+
+            auto subpasses = {vk::SubpassDescription2{
+                .pipelineBindPoint = vk::PipelineBindPoint::eGraphics,
+                .viewMask{},                // NOTE: to be used with multiview
+                .inputAttachmentCount = 0,  // NOTE: used to set input attachments
+                .pInputAttachments = nullptr,
+                .colorAttachmentCount = 1,
+                .pColorAttachments = &mainColorAttachmentReference,
+                .pResolveAttachments = nullptr, // NOTE: has something to do with multisampling
+                .pDepthStencilAttachment = nullptr,  // NOTE: should be used with depth/stencil buffer
+                .preserveAttachmentCount = 0,        // NOTE: used for any attachments that are not accessed in this subpass, but
+                                                     // shouldn't have their contents invalidated
+                .pPreserveAttachments = 0}};
+
+            vk::RenderPassCreateInfo2 renderPassCreateInfo{
+                .attachmentCount = static_cast<uint32_t>(attachments.size()),
+                .pAttachments = std::data(attachments),
+                .subpassCount = static_cast<uint32_t>(subpasses.size()),
+                .pSubpasses = std::data(subpasses),
+                .dependencyCount = 0,  // NOTE: should be used to specify edges in the subpass dependency DAG
+                .pDependencies = nullptr,
+                .correlatedViewMaskCount = 0,  // NOTE: has something to do with multiview
+                .pCorrelatedViewMasks = nullptr};
+
+            return device.createRenderPass2(renderPassCreateInfo);
+        }();
+
         auto [graphicsPipeline, graphicsPipelineLayout] = [&device, &swapchainImageExtent]() {
             auto [vertexShaderModule, fragmentShaderModule] = [&device]() {
                 auto createShaderModule = [&device](std::byte* spirv, size_t sz) {
@@ -410,7 +454,7 @@ int main() {
                 .lineWidth = 1.0           // a wider line requires a device feature
             };
             vk::PipelineMultisampleStateCreateInfo multisampleState{// NOTE: can be use for AA
-                                                                    .rasterizationSamples = vk::SampleCountFlagBits::e1};
+                                                                    .rasterizationSamples = APP_SAMPLE_COUNT};
             // NOTE: vk::PipelineDepthStencilStateCreateInfo is used when a depth/stencil buffer is present
             vk::PipelineColorBlendAttachmentState colorBlendAttachmentState{
                 // NOTE: can be disabled if not using blending
@@ -443,6 +487,7 @@ int main() {
         }
 
         device.destroy(graphicsPipelineLayout);
+        device.destroy(renderpass);
         // Cleanup
         for (auto&& swapchainImageView : swapchainImageViews) {
             device.destroy(swapchainImageView);
