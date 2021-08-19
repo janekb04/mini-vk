@@ -406,6 +406,26 @@ int main() {
             return device.createRenderPass2(renderPassCreateInfo);
         }();
 
+        auto framebuffers = [&device, &renderpass, &swapchainImageViews, &swapchainImageExtent](){
+            std::vector<vk::Framebuffer> framebuffers;
+            framebuffers.reserve(swapchainImageViews.size());
+            
+            for (auto&& image : swapchainImageViews)
+            {
+                vk::FramebufferCreateInfo framebufferCreateInfo{
+                    .renderPass = renderpass,
+                    .attachmentCount = 1,
+                    .pAttachments = &image,
+                    .width = swapchainImageExtent.width,
+                    .height = swapchainImageExtent.height,
+                    .layers = 1
+                };
+                framebuffers.push_back(device.createFramebuffer(framebufferCreateInfo));
+            }
+
+            return framebuffers;
+        }();
+
         auto [graphicsPipeline, graphicsPipelineLayout] = [&device, &swapchainImageExtent, &renderpass]() {
             auto [vertexShaderModule, fragmentShaderModule] = [&device]() {
                 auto createShaderModule = [&device](std::byte* spirv, size_t sz) {
@@ -512,6 +532,9 @@ int main() {
             glfw::pollEvents();
         }
 
+        for (auto&& framebuffer : framebuffers) {
+            device.destroy(framebuffer);
+        }
         device.destroy(graphicsPipeline);
         device.destroy(graphicsPipelineLayout);
         device.destroy(renderpass);
