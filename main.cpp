@@ -82,6 +82,7 @@ const char* const APP_VERTEX_SHADER_ENTRY_POINT = "main";
 const char* const APP_FRAGMENT_SHADER_PATH = "basic.frag.spv";
 const char* const APP_FRAGMENT_SHADER_ENTRY_POINT = "main";
 auto APP_SAMPLE_COUNT = vk::SampleCountFlagBits::e1;
+const uint32_t APP_GRAPHICS_PIPELINE_SUBPASS_INDEX = 0;
 
 [[nodiscard]] auto read_binary_file(const std::filesystem::path& p) {
     std::ifstream in{p, std::ios_base::in | std::ios_base::binary};
@@ -386,7 +387,7 @@ int main() {
                 .pInputAttachments = nullptr,
                 .colorAttachmentCount = 1,
                 .pColorAttachments = &mainColorAttachmentReference,
-                .pResolveAttachments = nullptr, // NOTE: has something to do with multisampling
+                .pResolveAttachments = nullptr,      // NOTE: has something to do with multisampling
                 .pDepthStencilAttachment = nullptr,  // NOTE: should be used with depth/stencil buffer
                 .preserveAttachmentCount = 0,        // NOTE: used for any attachments that are not accessed in this subpass, but
                                                      // shouldn't have their contents invalidated
@@ -405,7 +406,7 @@ int main() {
             return device.createRenderPass2(renderPassCreateInfo);
         }();
 
-        auto [graphicsPipeline, graphicsPipelineLayout] = [&device, &swapchainImageExtent]() {
+        auto [graphicsPipeline, graphicsPipelineLayout] = [&device, &swapchainImageExtent, &renderpass]() {
             auto [vertexShaderModule, fragmentShaderModule] = [&device]() {
                 auto createShaderModule = [&device](std::byte* spirv, size_t sz) {
                     return device.createShaderModule({.codeSize{sz}, .pCode{reinterpret_cast<uint32_t*>(spirv)}});
@@ -474,11 +475,36 @@ int main() {
             // NOTE: vk::PipelineDynamicStateCreateInfo can be used for dynamic state
             vk::PipelineLayout pipelineLayout = device.createPipelineLayout({});  // NOTE: used with uniforms and push constants
 
-            auto pipeline = vk::Pipeline{};
+            vk::GraphicsPipelineCreateInfo pipelineCreateInfo{
+                .flags{},
+                // NOTE: can be used to disable optimizations, enable derivative pipelines and VK_NV_device_generated_commands
+                .stageCount = static_cast<uint32_t>(shaderStageCreateInfos.size()),
+                .pStages = shaderStageCreateInfos.data(),
+                .pVertexInputState = &vertexInputState,
+                .pInputAssemblyState = &inputAssemblyState,
+                .pTessellationState = nullptr,
+                .pViewportState = &viewportState,
+                .pRasterizationState = &rasterizationState,
+                .pMultisampleState = &multisampleState,
+                .pColorBlendState = &colorBlendState,
+                .pDynamicState = nullptr,
+                .layout = pipelineLayout,
+                .renderPass = renderpass,
+                .subpass = APP_GRAPHICS_PIPELINE_SUBPASS_INDEX,
+                .basePipelineHandle = VK_NULL_HANDLE  // NOTE: can be used to derive from an existing pipeline
+                                                      // to speed up pipeline creation time
+            };
+
+            vk::PipelineCache pipelineCache = VK_NULL_HANDLE;  // NOTE: load cache from disk to speed up creation time
+            auto [result, pipeline] = device.createGraphicsPipeline(pipelineCache, pipelineCreateInfo);
+            if (result != vk::Result::eSuccess) {
+                // NOTE: a possible good value is VK_PIPELINE_COMPILE_REQUIRED_EXT
+                throw std::runtime_error("Couldn't create the graphics pipeline");
+            }
 
             device.destroy(vertexShaderModule);
             device.destroy(fragmentShaderModule);
-            return std::tuple{pipeline, pipelineLayout};
+            return std::tuple{std::move(pipeline), std::move(pipelineLayout)};
         }();
 
         // Main loop
@@ -486,6 +512,7 @@ int main() {
             glfw::pollEvents();
         }
 
+        device.destroy(graphicsPipeline);
         device.destroy(graphicsPipelineLayout);
         device.destroy(renderpass);
         // Cleanup
