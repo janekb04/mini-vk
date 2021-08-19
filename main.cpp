@@ -81,8 +81,9 @@ const char* const APP_VERTEX_SHADER_PATH = "basic.vert.spv";
 const char* const APP_VERTEX_SHADER_ENTRY_POINT = "main";
 const char* const APP_FRAGMENT_SHADER_PATH = "basic.frag.spv";
 const char* const APP_FRAGMENT_SHADER_ENTRY_POINT = "main";
-auto APP_SAMPLE_COUNT = vk::SampleCountFlagBits::e1;
+const auto APP_SAMPLE_COUNT = vk::SampleCountFlagBits::e1;
 const uint32_t APP_GRAPHICS_PIPELINE_SUBPASS_INDEX = 0;
+const auto APP_SUBPASS_PIPELINE_BIND_POINT = vk::PipelineBindPoint::eGraphics;
 
 [[nodiscard]] auto read_binary_file(const std::filesystem::path& p) {
     std::ifstream in{p, std::ios_base::in | std::ios_base::binary};
@@ -254,6 +255,14 @@ int main() {
 
         VULKAN_HPP_DEFAULT_DISPATCHER.init(device);  // load device-specific function pointers
 
+        auto commandPool = [&device, &graphicsFamilyIdx]() {
+            vk::CommandPoolCreateInfo commandPoolCreateInfo{
+                .flags{},  // NOTE: often CommandPoolCreateFlagBits::eTransient is used (when recording cmdbufs frequently)
+                .queueFamilyIndex = graphicsFamilyIdx};
+
+            return device.createCommandPool(commandPoolCreateInfo);
+        }();
+
         // Create swapchain with images
         auto [swapchain, swapchainImageFormat, swapchainImageExtent,
               swapchainImages] = [&physicalDeviceGroup, &surface, &graphicsFamilyIdx, &presentFamilyIdx, &window, &device]() {
@@ -338,6 +347,20 @@ int main() {
             return std::tuple{std::move(swapchain), surfaceFormat.format, extent, device.getSwapchainImagesKHR(swapchain)};
         }();
 
+        // NOTE: a single cmdbuf wouldn't suffice as that would make it impossible to have more than one frame in flight as a
+        // single command buffer referes to a single framebuffer at a given time. at the same time, though, maybe it could be
+        // reset and submited without invalidating the previous (already submited) version of itself?
+        auto commandBuffers = [&device, &commandPool, swapChainImageCount = swapchainImages.size()]() {
+            vk::CommandBufferAllocateInfo commandBufferAllocateInfo{
+                .commandPool = commandPool,
+                .level = vk::CommandBufferLevel::ePrimary,  // NOTE: secondary command buffers can be used to be invoked from
+                                                            // primary command buffers
+                .commandBufferCount =
+                    static_cast<uint32_t>(swapChainImageCount)  // one per frambuffer -> one per image view -> one per image
+            };
+            return device.allocateCommandBuffers(commandBufferAllocateInfo);
+        }();
+
         auto swapchainImageViews = [&device, &swapchainImages, &swapchainImageFormat]() {
             std::vector<vk::ImageView> swapchainImageViews;
             swapchainImageViews.reserve(swapchainImages.size());
@@ -381,7 +404,7 @@ int main() {
                                                                  // potentially cause some bug
 
             auto subpasses = {vk::SubpassDescription2{
-                .pipelineBindPoint = vk::PipelineBindPoint::eGraphics,
+                .pipelineBindPoint = APP_SUBPASS_PIPELINE_BIND_POINT,
                 .viewMask{},                // NOTE: to be used with multiview
                 .inputAttachmentCount = 0,  // NOTE: used to set input attachments
                 .pInputAttachments = nullptr,
@@ -406,20 +429,17 @@ int main() {
             return device.createRenderPass2(renderPassCreateInfo);
         }();
 
-        auto framebuffers = [&device, &renderpass, &swapchainImageViews, &swapchainImageExtent](){
+        auto framebuffers = [&device, &renderpass, &swapchainImageViews, &swapchainImageExtent]() {
             std::vector<vk::Framebuffer> framebuffers;
             framebuffers.reserve(swapchainImageViews.size());
-            
-            for (auto&& image : swapchainImageViews)
-            {
-                vk::FramebufferCreateInfo framebufferCreateInfo{
-                    .renderPass = renderpass,
-                    .attachmentCount = 1,
-                    .pAttachments = &image,
-                    .width = swapchainImageExtent.width,
-                    .height = swapchainImageExtent.height,
-                    .layers = 1
-                };
+
+            for (auto&& image : swapchainImageViews) {
+                vk::FramebufferCreateInfo framebufferCreateInfo{.renderPass = renderpass,
+                                                                .attachmentCount = 1,
+                                                                .pAttachments = &image,
+                                                                .width = swapchainImageExtent.width,
+                                                                .height = swapchainImageExtent.height,
+                                                                .layers = 1};
                 framebuffers.push_back(device.createFramebuffer(framebufferCreateInfo));
             }
 
@@ -527,8 +547,40 @@ int main() {
             return std::tuple{std::move(pipeline), std::move(pipelineLayout)};
         }();
 
+        // Record command buffers; NOTE: usually this isn't preprocessed, but done every frame
+        [&renderpass, &framebuffers, &swapchainImageExtent, &commandBuffers, &graphicsPipeline]() {
+            for (size_t i = 0; i < commandBuffers.size(); ++i) {
+                auto&& commandBuffer = commandBuffers[i];
+                commandBuffer.begin({
+                    .flags{},  // NOTE: VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT can be used when frequently recording
+                    .pInheritanceInfo = nullptr  // NOTE: used by secondary command buffers to inherit state from primary ones
+                });
+                commandBuffer.beginRenderPass2(
+                    {
+                        .renderPass = renderpass,
+                        .framebuffer = framebuffers[i],
+                        .renderArea = {.offset = {0, 0}, .extent = swapchainImageExtent},
+                        .clearValueCount = 0  // NOTE: used when there are any clearing operations
+                    },
+                    {
+                        .contents =
+                            vk::SubpassContents::eInline  // NOTE: can be used to source from secondary command buffers instead
+                    });
+
+                // NOTE: Actual rendering commands
+                commandBuffer.bindPipeline(APP_SUBPASS_PIPELINE_BIND_POINT, graphicsPipeline);
+                commandBuffer.draw(3, 1, 0, 0);  // NOTE: magic numbers
+
+                commandBuffer.endRenderPass2(vk::SubpassEndInfo{});
+                
+                commandBuffer.end();
+            }
+        }();
+
         // Main loop
         while (!window.shouldClose()) {
+            size_t image_index = 0;  // NOTE: TODO: TO BE IMPLEMENTED
+
             glfw::pollEvents();
         }
 
@@ -543,6 +595,7 @@ int main() {
             device.destroy(swapchainImageView);
         }
         device.destroy(swapchain);
+        device.destroy(commandPool);
         device.destroy();
         instance.destroy(surface);
         instance.destroy(APP_ALLOCATION_CALLBACKS);
