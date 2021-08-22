@@ -264,8 +264,8 @@ int main() {
         }();
 
         // Create swapchain with images
-        auto [swapchain, swapchainImageFormat, swapchainImageExtent,
-              swapchainImages] = [&physicalDeviceGroup, &surface, &graphicsFamilyIdx, &presentFamilyIdx, &window, &device]() {
+        auto [swapchain, swapchainImageFormat, swapchainImageExtent, swapchainImages,
+              maxFramesInFlight] = [&physicalDeviceGroup, &surface, &graphicsFamilyIdx, &presentFamilyIdx, &window, &device]() {
             // NOTE: possibly use the newer .getSurfaceCapabilities2KHR and similar instead; requires
             // the VK_KHR_get_surface_capabilities2 extension
             auto surfaceFormat = [&physicalDeviceGroup, &surface]() {
@@ -317,8 +317,10 @@ int main() {
                 (graphicsFamilyIdx != presentFamilyIdx) ? vk::SharingMode::eConcurrent : vk::SharingMode::eExclusive;
             auto queueFamilyIndices = ((graphicsFamilyIdx != presentFamilyIdx) ? std::vector{graphicsFamilyIdx, presentFamilyIdx}
                                                                                : std::vector<uint32_t>{});
-            auto compositeAlpha = window.getAttribTransparentFramebuffer() ? vk::CompositeAlphaFlagBitsKHR::ePostMultiplied
-                                                                           : vk::CompositeAlphaFlagBitsKHR::eOpaque;
+            auto compositeAlpha = (window.getAttribTransparentFramebuffer() &&
+                                   surfaceCapabilities.supportedCompositeAlpha & vk::CompositeAlphaFlagBitsKHR::ePostMultiplied)
+                                      ? vk::CompositeAlphaFlagBitsKHR::ePostMultiplied
+                                      : vk::CompositeAlphaFlagBitsKHR::eOpaque;
             // NOTE: consider using VK_EXT_full_screen_exclusive for potentially better performance
             vk::SwapchainCreateInfoKHR swapchainCreateInfo{
                 .pNext{},
@@ -344,7 +346,25 @@ int main() {
             };
 
             auto swapchain = device.createSwapchainKHR(swapchainCreateInfo);
-            return std::tuple{std::move(swapchain), surfaceFormat.format, extent, device.getSwapchainImagesKHR(swapchain)};
+            auto swapchainImages = device.getSwapchainImagesKHR(swapchain);
+            auto maxFramesInFlight = swapchainImages.size() - surfaceCapabilities.minImageCount;
+            return std::tuple{std::move(swapchain), surfaceFormat.format, extent, std::move(swapchainImages), maxFramesInFlight};
+        }();
+
+        // NOTE: use timeline semaphores and VK_KHR_synchronization2 for synchronization
+        auto [imageRenderedSemaphores, imageRenderedFences] = [&device, swapChainImageCount = swapchainImages.size()]() {
+            std::vector<vk::Semaphore> imageRenderedSemaphores;
+            std::vector<vk::Fence> imageRenderedFences;
+            imageRenderedSemaphores.reserve(swapChainImageCount);
+            imageRenderedFences.reserve(swapChainImageCount);
+
+            for (int i = 0; i < swapChainImageCount; ++i) {
+                imageRenderedSemaphores.push_back(device.createSemaphore(vk::SemaphoreCreateInfo{}));
+                imageRenderedFences.push_back(
+                    device.createFence(vk::FenceCreateInfo{.flags = vk::FenceCreateFlagBits::eSignaled}));
+            }
+
+            return std::tuple{std::move(imageRenderedSemaphores), std::move(imageRenderedFences)};
         }();
 
         // NOTE: a single cmdbuf wouldn't suffice as that would make it impossible to have more than one frame in flight as a
@@ -400,8 +420,7 @@ int main() {
             vk::AttachmentReference2 mainColorAttachmentReference{
                 .attachment = 0,
                 .layout = vk::ImageLayout::eColorAttachmentOptimal,
-                .aspectMask = vk::ImageAspectFlagBits::eColor};  // NOTE: I'm not sure if this aspect thing is ok or not, this may
-                                                                 // potentially cause some bug
+                .aspectMask{}};  // ignored, as it doesn't refer to an input attachment
 
             auto subpasses = {vk::SubpassDescription2{
                 .pipelineBindPoint = APP_SUBPASS_PIPELINE_BIND_POINT,
@@ -416,13 +435,25 @@ int main() {
                                                      // shouldn't have their contents invalidated
                 .pPreserveAttachments = 0}};
 
+            auto dependencies = {vk::SubpassDependency2{
+                .srcSubpass = VK_SUBPASS_EXTERNAL,  // operations before the first subpass
+                .dstSubpass = APP_GRAPHICS_PIPELINE_SUBPASS_INDEX,
+                .srcStageMask =
+                    vk::PipelineStageFlagBits::eColorAttachmentOutput,  // wait until everyone before us is done with the image
+                .dstStageMask =
+                    vk::PipelineStageFlagBits::eColorAttachmentOutput,  // we wait until the image is ready to be written to
+                .srcAccessMask{},  // NOTE: not sure what this does, but I'll just move on for now and get back to it
+                .dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite,
+                .dependencyFlags{}  // NOTE: also not sure what this does
+            }};
+
             vk::RenderPassCreateInfo2 renderPassCreateInfo{
                 .attachmentCount = static_cast<uint32_t>(attachments.size()),
                 .pAttachments = std::data(attachments),
                 .subpassCount = static_cast<uint32_t>(subpasses.size()),
                 .pSubpasses = std::data(subpasses),
-                .dependencyCount = 0,  // NOTE: should be used to specify edges in the subpass dependency DAG
-                .pDependencies = nullptr,
+                .dependencyCount = static_cast<uint32_t>(dependencies.size()),
+                .pDependencies = std::data(dependencies),
                 .correlatedViewMaskCount = 0,  // NOTE: has something to do with multiview
                 .pCorrelatedViewMasks = nullptr};
 
@@ -474,8 +505,7 @@ int main() {
             // NOTE: vk::PipelineTessellationStateCreateInfo is used with tesselation enabled
             vk::Viewport viewport{.x = 0,
                                   .y = 0,
-                                  .width = static_cast<float>(
-                                      swapchainImageExtent.width),  // NOTE: without the cast there was an error, possible bug
+                                  .width = static_cast<float>(swapchainImageExtent.width),
                                   .height = static_cast<float>(swapchainImageExtent.height),
                                   .minDepth = 0.0,
                                   .maxDepth = 1.0};
@@ -505,7 +535,11 @@ int main() {
                 .colorBlendOp = vk::BlendOp::eAdd,
                 .srcAlphaBlendFactor = vk::BlendFactor::eOne,
                 .dstAlphaBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha,
-                .alphaBlendOp = vk::BlendOp::eAdd};
+                .alphaBlendOp = vk::BlendOp::eAdd,
+                .colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
+                                  vk::ColorComponentFlagBits::eB |
+                                  vk::ColorComponentFlagBits::eA  // NOTE: when this initializer was missing there was no output
+            };
             vk::PipelineColorBlendStateCreateInfo colorBlendState{
                 .logicOpEnable = false,  // NOTE: can be used for bitwise compositing, possibly in OIT
                 .attachmentCount = 1,    // NOTE: can use multiplt for multiple target; different options require a device feature
@@ -572,27 +606,73 @@ int main() {
                 commandBuffer.draw(3, 1, 0, 0);  // NOTE: magic numbers
 
                 commandBuffer.endRenderPass2(vk::SubpassEndInfo{});
-                
+
                 commandBuffer.end();
             }
         }();
 
         // Main loop
-        while (!window.shouldClose()) {
-            size_t image_index = 0;  // NOTE: TODO: TO BE IMPLEMENTED
+        [&window, &physicalDeviceGroup, &device, &commandBuffers, &graphicsQueue, &swapchain, &maxFramesInFlight,
+         &imageRenderedSemaphores, &imageRenderedFences, swapchainImageCount = swapchainImages.size()]() {
+            std::vector<vk::Semaphore> dump; // NOTE: very bad code; FIX ASAP; prefereably use max_frames_in_flight
+            auto getNextImageAcquiredSemaphore = [&device, &dump]() {
+                if (dump.size() < 10) {
+                    auto s = device.createSemaphore(vk::SemaphoreCreateInfo{});
+                    dump.push_back(s);
+                    return s;
+                } else {
+                    return dump.front();
+                }
+            };
 
-            glfw::pollEvents();
-        }
+            while (!window.shouldClose()) {
+                glfw::pollEvents();
+                // Acquire the image to render to from the swapchain
+                auto imageAcquiredSemaphore = getNextImageAcquiredSemaphore();
+                auto imageIndex = device.acquireNextImage2KHR(
+                    vk::AcquireNextImageInfoKHR{.swapchain = swapchain,
+                                                .timeout = std::numeric_limits<uint64_t>::max(),
+                                                .semaphore = imageAcquiredSemaphore,
+                                                .deviceMask = (1u << physicalDeviceGroup.physicalDeviceCount) - 1u});
+                device.waitForFences(imageRenderedFences[imageIndex], true, std::numeric_limits<uint64_t>::max());
+                device.resetFences(imageRenderedFences[imageIndex]);
+                // Submit rendering commands to the GPU
+                vk::PipelineStageFlags waitStageBits = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+                graphicsQueue.submit(vk::SubmitInfo{.waitSemaphoreCount = 1,
+                                                    .pWaitSemaphores = &imageAcquiredSemaphore,
+                                                    .pWaitDstStageMask = &waitStageBits,
+                                                    .commandBufferCount = 1,
+                                                    .pCommandBuffers = &commandBuffers[imageIndex],
+                                                    .signalSemaphoreCount = 1,
+                                                    .pSignalSemaphores = &imageRenderedSemaphores[imageIndex]},
+                                     imageRenderedFences[imageIndex]);
+                graphicsQueue.presentKHR(vk::PresentInfoKHR{.waitSemaphoreCount = 1,
+                                                            .pWaitSemaphores = &imageRenderedSemaphores[imageIndex],
+                                                            .swapchainCount = 1,
+                                                            .pSwapchains = &swapchain,
+                                                            .pImageIndices = &imageIndex.value});
+            }
+            device.waitIdle();
 
+            for (auto&& s : dump)
+                device.destroy(s);
+        }();
+
+        // Cleanup
         for (auto&& framebuffer : framebuffers) {
             device.destroy(framebuffer);
         }
         device.destroy(graphicsPipeline);
         device.destroy(graphicsPipelineLayout);
         device.destroy(renderpass);
-        // Cleanup
         for (auto&& swapchainImageView : swapchainImageViews) {
             device.destroy(swapchainImageView);
+        }
+        for (auto&& imageRenderedSemaphore : imageRenderedSemaphores) {
+            device.destroy(imageRenderedSemaphore);
+        }
+        for (auto&& imageRenderedFence : imageRenderedFences) {
+            device.destroy(imageRenderedFence);
         }
         device.destroy(swapchain);
         device.destroy(commandPool);
