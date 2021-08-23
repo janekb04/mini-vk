@@ -14,7 +14,11 @@ VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE  // has to be defined exactly
                                                     // once when using
                                                     // VULKAN_HPP_DISPATCH_LOADER_DYNAMIC
 
+#define NOMINMAX
+#define GLFW_EXPOSE_NATIVE_WIN32
+#include <Windows.h>
 #include <glfwpp/glfwpp.h>  // use my (janekb04 at Github) C++ wrapper for GLFW
+#include <glfwpp/native.h>
 
 #include <algorithm>
 #include <array>
@@ -96,12 +100,42 @@ const auto APP_SUBPASS_PIPELINE_BIND_POINT = vk::PipelineBindPoint::eGraphics;
     return std::tuple{std::move(buffer), sz};
 }
 
+void setAcrylic(glfw::Window& wnd) noexcept {
+    const HINSTANCE hModule = LoadLibrary(TEXT("user32.dll"));
+    if (hModule) {
+        struct ACCENTPOLICY {
+            int nAccentState;
+            int nFlags;
+            int nColor;
+            int nAnimationId;
+        };
+        struct WINCOMPATTRDATA {
+            int nAttribute;
+            PVOID pData;
+            ULONG ulDataSize;
+        };
+        typedef BOOL(WINAPI * pSetWindowCompositionAttribute)(HWND, WINCOMPATTRDATA*);
+        const pSetWindowCompositionAttribute SetWindowCompositionAttribute =
+            (pSetWindowCompositionAttribute)GetProcAddress(hModule, "SetWindowCompositionAttribute");
+        if (SetWindowCompositionAttribute) {
+            ACCENTPOLICY policy = {3, 0, 1, 0};  // Light Blur , not as much as default Windows Effect (eg. Calculator)
+            //ACCENTPOLICY policy = { 4, 0, 1, 0 }; // default Windows Blur , movement Glitchy
+
+            WINCOMPATTRDATA data = {19, &policy, sizeof(ACCENTPOLICY)};  // WCA_ACCENT_POLICY=19
+            SetWindowCompositionAttribute(glfw::native::getWin32Window(wnd), &data);
+        }
+        FreeLibrary(hModule);
+    }
+}
+
 int main() {
     try {
         // Initialize GLFW and create window
         auto GLFW = glfw::init();
-        glfw::WindowHints{.resizable = false, .clientApi = glfw::ClientApi::None}.apply();
+        glfw::WindowHints{.resizable = false, .transparentFramebuffer = true, .clientApi = glfw::ClientApi::None}.apply();
         glfw::Window window{WND_WIDTH, WND_HEIGHT, APP_NAME};
+
+        setAcrylic(window);
 
         // Load global Vulkan functions
         vk::DynamicLoader dl;  // has destructor
