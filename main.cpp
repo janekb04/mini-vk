@@ -352,7 +352,9 @@ int main() {
         }();
 
         // NOTE: use timeline semaphores and VK_KHR_synchronization2 for synchronization
-        auto [imageRenderedSemaphores, imageRenderedFences] = [&device, swapChainImageCount = swapchainImages.size()]() {
+        auto [currentImageAcquiredSemaphores, imageRenderedSemaphores,
+              imageRenderedFences] = [&device, swapChainImageCount = swapchainImages.size()]() {
+            std::vector<vk::Semaphore> currentImageAcquiredSemaphores{swapChainImageCount, VK_NULL_HANDLE};
             std::vector<vk::Semaphore> imageRenderedSemaphores;
             std::vector<vk::Fence> imageRenderedFences;
             imageRenderedSemaphores.reserve(swapChainImageCount);
@@ -364,7 +366,8 @@ int main() {
                     device.createFence(vk::FenceCreateInfo{.flags = vk::FenceCreateFlagBits::eSignaled}));
             }
 
-            return std::tuple{std::move(imageRenderedSemaphores), std::move(imageRenderedFences)};
+            return std::tuple{std::move(currentImageAcquiredSemaphores), std::move(imageRenderedSemaphores),
+                              std::move(imageRenderedFences)};
         }();
 
         // NOTE: a single cmdbuf wouldn't suffice as that would make it impossible to have more than one frame in flight as a
@@ -613,16 +616,16 @@ int main() {
 
         // Main loop
         [&window, &physicalDeviceGroup, &device, &commandBuffers, &graphicsQueue, &swapchain, &maxFramesInFlight,
-         &imageRenderedSemaphores, &imageRenderedFences, swapchainImageCount = swapchainImages.size()]() {
-            std::vector<vk::Semaphore> dump; // NOTE: very bad code; FIX ASAP; prefereably use max_frames_in_flight
-            auto getNextImageAcquiredSemaphore = [&device, &dump]() {
-                if (dump.size() < 10) {
-                    auto s = device.createSemaphore(vk::SemaphoreCreateInfo{});
-                    dump.push_back(s);
-                    return s;
-                } else {
-                    return dump.front();
+         &currentImageAcquiredSemaphores, &imageRenderedSemaphores, &imageRenderedFences,
+         swapchainImageCount = swapchainImages.size()]() {
+            std::vector<vk::Semaphore> availableImageAcquiredSemaphores;
+            auto getNextImageAcquiredSemaphore = [&device, &availableImageAcquiredSemaphores]() {
+                if (availableImageAcquiredSemaphores.empty()) {
+                    return device.createSemaphore(vk::SemaphoreCreateInfo{});
                 }
+                auto semaphore = availableImageAcquiredSemaphores.back();
+                availableImageAcquiredSemaphores.pop_back();
+                return semaphore;
             };
 
             while (!window.shouldClose()) {
@@ -636,6 +639,11 @@ int main() {
                                                 .deviceMask = (1u << physicalDeviceGroup.physicalDeviceCount) - 1u});
                 device.waitForFences(imageRenderedFences[imageIndex], true, std::numeric_limits<uint64_t>::max());
                 device.resetFences(imageRenderedFences[imageIndex]);
+                if (currentImageAcquiredSemaphores[imageIndex]) {
+                    availableImageAcquiredSemaphores.push_back(currentImageAcquiredSemaphores[imageIndex]);
+                }
+                currentImageAcquiredSemaphores[imageIndex] = imageAcquiredSemaphore;
+
                 // Submit rendering commands to the GPU
                 vk::PipelineStageFlags waitStageBits = vk::PipelineStageFlagBits::eColorAttachmentOutput;
                 graphicsQueue.submit(vk::SubmitInfo{.waitSemaphoreCount = 1,
@@ -654,7 +662,7 @@ int main() {
             }
             device.waitIdle();
 
-            for (auto&& s : dump)
+            for (auto&& s : availableImageAcquiredSemaphores)
                 device.destroy(s);
         }();
 
@@ -673,6 +681,11 @@ int main() {
         }
         for (auto&& imageRenderedFence : imageRenderedFences) {
             device.destroy(imageRenderedFence);
+        }
+        for (auto&& currentImageAcquiredSemaphore : currentImageAcquiredSemaphores) {
+            if (currentImageAcquiredSemaphore) {
+                device.destroy(currentImageAcquiredSemaphore);
+            }
         }
         device.destroy(swapchain);
         device.destroy(commandPool);
