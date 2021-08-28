@@ -23,7 +23,6 @@ VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE  // has to be defined exactly
 #include <fstream>
 #include <iostream>
 #include <memory>
-#include <span>
 #include <tuple>
 #include <type_traits>
 
@@ -485,8 +484,11 @@ int main() {
                 auto createShaderModule = [&device](std::byte* spirv, size_t sz) {
                     return device.createShaderModule({.codeSize{sz}, .pCode{reinterpret_cast<uint32_t*>(spirv)}});
                 };
-                auto [vertexShaderBinary, vertexShaderByteLength] = read_binary_file(APP_VERTEX_SHADER_PATH);
-                auto [fragmentShaderBinary, fragmentShaderByteLength] = read_binary_file(APP_FRAGMENT_SHADER_PATH);
+                std::unique_ptr<std::byte[]> vertexShaderBinary, fragmentShaderBinary;
+                size_t vertexShaderByteLength, fragmentShaderByteLength;
+                std::tie(vertexShaderBinary, vertexShaderByteLength) = read_binary_file(
+                    APP_VERTEX_SHADER_PATH);  // NOTE: for some reason MSVC doesn't like a structured binding here
+                std::tie(fragmentShaderBinary, fragmentShaderByteLength) = read_binary_file(APP_FRAGMENT_SHADER_PATH);
                 auto vertexShaderModule = createShaderModule(vertexShaderBinary.get(), vertexShaderByteLength);
                 auto fragmentShaderModule = createShaderModule(fragmentShaderBinary.get(), fragmentShaderByteLength);
                 return std::tuple{vertexShaderModule, fragmentShaderModule};
